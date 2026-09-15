@@ -97,6 +97,11 @@ const unsigned long BUTTON_DEBOUNCE_TIME = 200;
 
 double currentTemperature = NAN;
 
+double celsiusToFahrenheit(double celsius)
+{
+    return (celsius * 9.0 / 5.0) + 32.0;
+}
+
 // ============================================================
 // TARGET
 // ============================================================
@@ -753,7 +758,11 @@ void updateDisplay()
     noInterrupts();
 
     displayTarget =
-        encoderValue;
+        (int)round(
+            celsiusToFahrenheit(
+                (double)encoderValue
+            )
+        );
 
     interrupts();
 
@@ -787,7 +796,7 @@ void updateDisplay()
     );
 
     display.println(
-        "TEMP"
+        "TEMP(F)"
     );
 
     display.setTextSize(2);
@@ -808,21 +817,12 @@ void updateDisplay()
     else
     {
         display.print(
-            currentTemperature,
+            celsiusToFahrenheit(
+                currentTemperature
+            ),
             1
         );
     }
-
-    display.setTextSize(1);
-
-    display.setCursor(
-        34,
-        27
-    );
-
-    display.println(
-        "C"
-    );
 
     // ========================================================
     // RIGHT SIDE - TARGET
@@ -844,7 +844,7 @@ void updateDisplay()
     else
     {
         display.println(
-            "EDIT"
+            "EDITING"
         );
     }
 
@@ -887,7 +887,7 @@ void updateDisplay()
     display.setTextSize(1);
 
     display.print(
-        "C"
+        "F"
     );
 
     // Restore text color
@@ -942,7 +942,7 @@ void updateDisplay()
         );
 
         display.print(
-            "PRESS SET"
+            "PRESS TO SET"
         );
     }
 
@@ -958,7 +958,7 @@ void updateDisplay()
         );
 
         display.print(
-            "PRESS SET"
+            "PRESS TO SET"
         );
     }
 
