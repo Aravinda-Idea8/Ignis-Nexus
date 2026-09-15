@@ -113,9 +113,9 @@ double setpoint = 0.0;
 // PID
 // ============================================================
 
-double Kp = 2.5;
-double Ki = 0.02;
-double Kd = 45.0;
+double Kp = 5.0;
+double Ki = 0.2;
+double Kd = 20.0;
 
 double integral = 0.0;
 double previousError = 0.0;
@@ -135,9 +135,6 @@ const unsigned long TEMPERATURE_INTERVAL = 250;
 
 unsigned long lastDisplayUpdate = 0;
 const unsigned long DISPLAY_INTERVAL = 100;
-
-unsigned long lastSerialOutput = 0;
-const unsigned long SERIAL_INTERVAL = 500;
 
 unsigned long lastOLEDAttempt = 0;
 const unsigned long OLED_RETRY_INTERVAL = 1000;
@@ -210,10 +207,6 @@ void readTemperature()
 
         heaterOff();
 
-        Serial.println(
-            "SAFETY: Invalid MAX6675 reading - HEATER OFF"
-        );
-
         return;
     }
 
@@ -224,10 +217,6 @@ void readTemperature()
         temperatureValid = false;
 
         heaterOff();
-
-        Serial.println(
-            "SAFETY: MAX6675 temperature out of range - HEATER OFF"
-        );
 
         return;
     }
@@ -256,58 +245,102 @@ void resetPID()
 // CALCULATE PID
 // ============================================================
 
-double calculatePID(double target, double temperature)
+double calculatePID(
+    double target,
+    double temperature
+)
 {
-    unsigned long currentTime = millis();
-    double dt = (currentTime - previousPIDCalculation) / 1000.0;
-    if (dt <= 0.0) dt = 0.001;
-    previousPIDCalculation = currentTime;
+    unsigned long currentTime =
+        millis();
 
-    double error = target - temperature;
+    double dt =
+        (currentTime - previousPIDCalculation)
+        / 1000.0;
+
+    if (dt <= 0.0)
+    {
+        dt = 0.001;
+    }
+
+    previousPIDCalculation =
+        currentTime;
+
+    // --------------------------------------------------------
+    // ERROR
+    // --------------------------------------------------------
+
+    double error =
+        target - temperature;
 
     // --------------------------------------------------------
     // PROPORTIONAL
     // --------------------------------------------------------
-    double P = Kp * error;
+
+    double P =
+        Kp * error;
 
     // --------------------------------------------------------
-    // INTEGRAL WITH CONDITIONAL ACCUMULATION (ANTI-WINDUP)
+    // INTEGRAL
     // --------------------------------------------------------
-    // Only accumulate integral when within a 15°C "Control Zone".
-    // This stops integral windup during the cold heating phase!
-    if (abs(error) < 15.0) 
+
+    integral +=
+        error * dt;
+
+    // Anti-windup
+    if (Ki > 0.0)
     {
-        integral += error * dt;
+        double integralLimit =
+            100.0 / Ki;
 
-        // Clamp integral contribution to 0 - 100% PWM range
-        if (Ki > 0.0) {
-            double maxIntegral = 100.0 / Ki;
-            integral = constrain(integral, -maxIntegral, maxIntegral);
+        if (integral > integralLimit)
+        {
+            integral =
+                integralLimit;
         }
-    } 
-    else 
-    {
-        // Zero out integral when far away from setpoint
-        integral = 0.0;
+
+        if (integral < -integralLimit)
+        {
+            integral =
+                -integralLimit;
+        }
     }
 
-    double I = Ki * integral;
+    double I =
+        Ki * integral;
 
     // --------------------------------------------------------
-    // DERIVATIVE ON MEASUREMENT (Prevents Derivative Kicks)
+    // DERIVATIVE
     // --------------------------------------------------------
-    // Using (error - previousError) / dt is mathematically equal to:
-    // - (currentTemp - previousTemp) / dt.
-    double derivative = (error - previousError) / dt;
-    double D = Kd * derivative;
 
-    previousError = error;
+    double derivative =
+        (error - previousError)
+        / dt;
+
+    double D =
+        Kd * derivative;
+
+    previousError =
+        error;
 
     // --------------------------------------------------------
-    // TOTAL OUTPUT & CLAMPING
+    // PID OUTPUT
     // --------------------------------------------------------
-    double output = P + I + D;
-    return constrain(output, 0.0, 100.0);
+
+    double output =
+        P + I + D;
+
+    // Limit 0-100%
+    if (output > 100.0)
+    {
+        output = 100.0;
+    }
+
+    if (output < 0.0)
+    {
+        output = 0.0;
+    }
+
+    return output;
 }
 
 // ============================================================
@@ -382,34 +415,6 @@ void updateHeater()
         heaterOff();
 
         controlActive = false;
-
-        Serial.println(
-            "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
-        );
-
-        Serial.println(
-            "SAFETY SHUTDOWN"
-        );
-
-        Serial.print(
-            "Temperature: "
-        );
-
-        Serial.print(
-            currentTemperature
-        );
-
-        Serial.println(
-            " C"
-        );
-
-        Serial.println(
-            "HEATER FORCED OFF"
-        );
-
-        Serial.println(
-            "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
-        );
 
         return;
     }
@@ -522,9 +527,6 @@ void handleButton()
 
                 resetPID();
 
-                Serial.println(
-                    "Target = 0 C - HEATER OFF"
-                );
             }
             else
             {
@@ -542,30 +544,6 @@ void handleButton()
 
                     resetPID();
 
-                    Serial.println();
-                    Serial.println(
-                        "=============================="
-                    );
-
-                    Serial.print(
-                        "TARGET CONFIRMED: "
-                    );
-
-                    Serial.print(
-                        targetValue
-                    );
-
-                    Serial.println(
-                        " C"
-                    );
-
-                    Serial.println(
-                        "HEATER CONTROL ACTIVE"
-                    );
-
-                    Serial.println(
-                        "=============================="
-                    );
                 }
                 else
                 {
@@ -577,9 +555,6 @@ void handleButton()
 
                     heaterOff();
 
-                    Serial.println(
-                        "Cannot start: temperature sensor invalid"
-                    );
                 }
             }
         }
@@ -621,17 +596,6 @@ void handleEncoderMovement()
 
         interrupts();
 
-        Serial.print(
-            "Editing target: "
-        );
-
-        Serial.print(
-            value
-        );
-
-        Serial.println(
-            " C"
-        );
     }
 }
 
@@ -641,10 +605,6 @@ void handleEncoderMovement()
 
 bool initializeOLED()
 {
-    Serial.println(
-        "Attempting OLED initialization..."
-    );
-
     if (
         display.begin(
             SSD1306_SWITCHCAPVCC,
@@ -654,10 +614,6 @@ bool initializeOLED()
     {
         oledReady =
             true;
-
-        Serial.println(
-            "OLED initialized successfully."
-        );
 
         display.clearDisplay();
 
@@ -703,10 +659,6 @@ bool initializeOLED()
 
     oledReady =
         false;
-
-    Serial.println(
-        "OLED initialization FAILED."
-    );
 
     // IMPORTANT:
     // OLED failure always means heater OFF.
@@ -838,13 +790,13 @@ void updateDisplay()
     if (targetConfirmed)
     {
         display.println(
-            "SET"
+            "SET POINT"
         );
     }
     else
     {
         display.println(
-            "EDITING"
+            "EDITTING"
         );
     }
 
@@ -884,18 +836,6 @@ void updateDisplay()
         displayTarget
     );
 
-    display.setTextSize(1);
-
-    display.print(
-        "F"
-    );
-
-    // Restore text color
-    display.setTextColor(
-        SSD1306_WHITE
-    );
-
-    // ========================================================
     // STATUS
     // ========================================================
 
@@ -941,150 +881,25 @@ void updateDisplay()
             51
         );
 
-        display.print(
-            "PRESS TO SET"
-        );
-    }
+        if (targetConfirmed)
+        {
+            display.print(
+                (int)pidOutput
+            );
 
-    // ========================================================
-    // EDITING MESSAGE
-    // ========================================================
-
-    if (!targetConfirmed)
-    {
-        display.setCursor(
-            68,
-            43
-        );
-
-        display.print(
-            "PRESS TO SET"
-        );
+            display.print(
+                "%"
+            );
+        }
+        else
+        {
+            display.print(
+                "SET"
+            );
+        }
     }
 
     display.display();
-}
-
-// ============================================================
-// SERIAL DATA
-// ============================================================
-
-void sendSerialData()
-{
-    Serial.print(
-        "DATA,"
-    );
-
-    // Time
-    Serial.print(
-        millis()
-    );
-
-    Serial.print(",");
-
-    // Temperature
-    if (
-        isnan(currentTemperature)
-    )
-    {
-        Serial.print(
-            "NAN"
-        );
-    }
-    else
-    {
-        Serial.print(
-            currentTemperature,
-            2
-        );
-    }
-
-    Serial.print(",");
-
-    // Setpoint
-    Serial.print(
-        setpoint,
-        2
-    );
-
-    Serial.print(",");
-
-    // Error
-    if (
-        isnan(currentTemperature)
-    )
-    {
-        Serial.print(
-            "NAN"
-        );
-    }
-    else
-    {
-        Serial.print(
-            setpoint - currentTemperature,
-            2
-        );
-    }
-
-    Serial.print(",");
-
-    // PID output
-    Serial.print(
-        pidOutput,
-        2
-    );
-
-    Serial.print(",");
-
-    // Kp
-    Serial.print(
-        Kp,
-        3
-    );
-
-    Serial.print(",");
-
-    // Ki
-    Serial.print(
-        Ki,
-        3
-    );
-
-    Serial.print(",");
-
-    // Kd
-    Serial.print(
-        Kd,
-        3
-    );
-
-    Serial.print(",");
-
-    // System status
-    Serial.print(
-        systemReady ? 1 : 0
-    );
-
-    Serial.print(",");
-
-    // OLED status
-    Serial.print(
-        oledReady ? 1 : 0
-    );
-
-    Serial.print(",");
-
-    // Temperature validity
-    Serial.print(
-        temperatureValid ? 1 : 0
-    );
-
-    Serial.print(",");
-
-    // Control status
-    Serial.println(
-        controlActive ? 1 : 0
-    );
 }
 
 // ============================================================
@@ -1106,33 +921,6 @@ void setup()
     digitalWrite(
         HEATER_PIN,
         LOW
-    );
-
-    // ========================================================
-    // SERIAL
-    // ========================================================
-
-    Serial.begin(
-        115200
-    );
-
-    delay(500);
-
-    Serial.println();
-    Serial.println(
-        "========================================"
-    );
-
-    Serial.println(
-        " XIAO ESP32-S3 PTC PID CONTROLLER"
-    );
-
-    Serial.println(
-        " FAIL-SAFE VERSION"
-    );
-
-    Serial.println(
-        "========================================"
     );
 
     // ========================================================
@@ -1192,10 +980,6 @@ void setup()
     // PWM
     // ========================================================
 
-    Serial.println(
-        "Initializing PWM..."
-    );
-
     ledcSetup(
         PWM_CHANNEL,
         PWM_FREQUENCY,
@@ -1219,17 +1003,9 @@ void setup()
         LOW
     );
 
-    Serial.println(
-        "PWM initialized - HEATER OFF"
-    );
-
     // ========================================================
     // I2C
     // ========================================================
-
-    Serial.println(
-        "Initializing I2C..."
-    );
 
     Wire.begin(
         OLED_SDA,
@@ -1248,10 +1024,6 @@ void setup()
     // MAX6675
     // ========================================================
 
-    Serial.println(
-        "Initializing temperature sensor..."
-    );
-
     delay(500);
 
     readTemperature();
@@ -1261,36 +1033,6 @@ void setup()
     // ========================================================
 
     resetPID();
-
-    // ========================================================
-    // CHECK SENSOR
-    // ========================================================
-
-    if (!temperatureValid)
-    {
-        Serial.println(
-            "WARNING: Temperature sensor invalid."
-        );
-
-        Serial.println(
-            "HEATER WILL REMAIN OFF."
-        );
-    }
-    else
-    {
-        Serial.print(
-            "Initial temperature: "
-        );
-
-        Serial.print(
-            currentTemperature,
-            2
-        );
-
-        Serial.println(
-            " C"
-        );
-    }
 
     // ========================================================
     // SYSTEM READY
@@ -1313,30 +1055,6 @@ void setup()
         systemReady =
             true;
 
-        Serial.println();
-        Serial.println(
-            "========================================"
-        );
-
-        Serial.println(
-            "SYSTEM READY"
-        );
-
-        Serial.println(
-            "Rotate encoder to select temperature."
-        );
-
-        Serial.println(
-            "Press encoder button to start heating."
-        );
-
-        Serial.println(
-            "HEATER CURRENTLY OFF"
-        );
-
-        Serial.println(
-            "========================================"
-        );
     }
     else
     {
@@ -1345,36 +1063,6 @@ void setup()
 
         heaterOff();
 
-        Serial.println();
-        Serial.println(
-            "========================================"
-        );
-
-        Serial.println(
-            "SYSTEM NOT READY"
-        );
-
-        Serial.println(
-            "HEATER FORCED OFF"
-        );
-
-        if (!oledReady)
-        {
-            Serial.println(
-                "Reason: OLED not initialized"
-            );
-        }
-
-        if (!temperatureValid)
-        {
-            Serial.println(
-                "Reason: MAX6675 invalid"
-            );
-        }
-
-        Serial.println(
-            "========================================"
-        );
     }
 
     // ========================================================
@@ -1391,9 +1079,6 @@ void setup()
         now;
 
     lastDisplayUpdate =
-        now;
-
-    lastSerialOutput =
         now;
 
     lastOLEDAttempt =
@@ -1469,22 +1154,6 @@ void loop()
             currentTime;
 
         updateDisplay();
-    }
-
-    // ========================================================
-    // SERIAL
-    // ========================================================
-
-    if (
-        currentTime -
-        lastSerialOutput
-        >= SERIAL_INTERVAL
-    )
-    {
-        lastSerialOutput =
-            currentTime;
-
-        sendSerialData();
     }
 
     // ========================================================
