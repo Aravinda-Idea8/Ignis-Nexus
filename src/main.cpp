@@ -907,7 +907,7 @@ void updateDisplay()
 
     display.setCursor(
         3,
-        40
+        45
     );
 
     display.print(
@@ -999,7 +999,7 @@ void updateDisplay()
         );
 
         display.print(
-            "SET"
+            "PRESET"
         );
     }
     else if (controlActive)
