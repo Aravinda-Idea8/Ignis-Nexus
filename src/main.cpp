@@ -57,6 +57,22 @@ const int MAX_TEMP = 200;
 const double MAX_SAFE_TEMP = 205.0;
 
 // ============================================================
+// TEMPERATURE FILTER
+// ============================================================
+
+// Maximum temperature change allowed between two valid readings.
+// MAX6675 is sampled every 250 ms.
+const double MAX_TEMP_CHANGE_PER_SAMPLE = 10.0;   // °C
+
+// Number of consecutive abnormal readings required before
+// accepting a large temperature change.
+const int FILTER_CONFIRM_COUNT = 3;
+
+double lastAcceptedTemperature = NAN;
+
+double pendingTemperature = NAN;
+int pendingTemperatureCount = 0;
+// ============================================================
 // PWM
 // ============================================================
 
@@ -194,12 +210,19 @@ void IRAM_ATTR encoderISR()
 // READ TEMPERATURE
 // ============================================================
 
+// ============================================================
+// READ TEMPERATURE WITH SOFTWARE FILTER
+// ============================================================
+
 void readTemperature()
 {
     double temperature =
         thermocouple.readCelsius();
 
+    // --------------------------------------------------------
     // MAX6675 disconnected / invalid
+    // --------------------------------------------------------
+
     if (isnan(temperature))
     {
         currentTemperature = NAN;
@@ -210,7 +233,10 @@ void readTemperature()
         return;
     }
 
+    // --------------------------------------------------------
     // MAX6675 fault
+    // --------------------------------------------------------
+
     if (temperature < -20.0 || temperature > 1000.0)
     {
         currentTemperature = NAN;
@@ -221,8 +247,109 @@ void readTemperature()
         return;
     }
 
-    currentTemperature = temperature;
-    temperatureValid = true;
+    // --------------------------------------------------------
+    // FIRST VALID READING
+    // --------------------------------------------------------
+
+    if (isnan(lastAcceptedTemperature))
+    {
+        lastAcceptedTemperature = temperature;
+        currentTemperature = temperature;
+
+        temperatureValid = true;
+
+        pendingTemperature = NAN;
+        pendingTemperatureCount = 0;
+
+        return;
+    }
+
+    // --------------------------------------------------------
+    // CALCULATE CHANGE FROM LAST ACCEPTED VALUE
+    // --------------------------------------------------------
+
+    double temperatureChange =
+        fabs(temperature - lastAcceptedTemperature);
+
+    // --------------------------------------------------------
+    // NORMAL CHANGE
+    //
+    // If the temperature changed by a reasonable amount,
+    // accept it immediately.
+    // --------------------------------------------------------
+
+    if (temperatureChange <= MAX_TEMP_CHANGE_PER_SAMPLE)
+    {
+        lastAcceptedTemperature = temperature;
+        currentTemperature = temperature;
+
+        temperatureValid = true;
+
+        // Cancel any pending abnormal reading
+        pendingTemperature = NAN;
+        pendingTemperatureCount = 0;
+
+        return;
+    }
+
+    // --------------------------------------------------------
+    // ABNORMAL CHANGE DETECTED
+    //
+    // Example:
+    //
+    // 100°C -> 50°C
+    //
+    // Difference = 50°C
+    //
+    // This reading is NOT immediately accepted.
+    // --------------------------------------------------------
+
+    // Check whether this abnormal value is consistent with
+    // previous abnormal readings.
+
+    if (!isnan(pendingTemperature))
+    {
+        if (fabs(temperature - pendingTemperature)
+            <= MAX_TEMP_CHANGE_PER_SAMPLE)
+        {
+            pendingTemperatureCount++;
+        }
+        else
+        {
+            // New abnormal value, restart confirmation
+            pendingTemperature = temperature;
+            pendingTemperatureCount = 1;
+        }
+    }
+    else
+    {
+        pendingTemperature = temperature;
+        pendingTemperatureCount = 1;
+    }
+
+    // --------------------------------------------------------
+    // ACCEPT ONLY AFTER MULTIPLE CONSISTENT READINGS
+    // --------------------------------------------------------
+
+    if (pendingTemperatureCount >= FILTER_CONFIRM_COUNT)
+    {
+        lastAcceptedTemperature = temperature;
+        currentTemperature = temperature;
+
+        temperatureValid = true;
+
+        pendingTemperature = NAN;
+        pendingTemperatureCount = 0;
+    }
+
+    // --------------------------------------------------------
+    // OTHERWISE:
+    // Keep the previous accepted temperature.
+    //
+    // This is important because the PID will continue using
+    // the last trustworthy temperature instead of the bad
+    // MAX6675 reading.
+    // --------------------------------------------------------
 }
 
 // ============================================================
