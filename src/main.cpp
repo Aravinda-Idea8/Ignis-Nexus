@@ -776,6 +776,29 @@ void updateDisplay()
         );
     }
 
+    display.setTextSize(1);
+
+    display.setCursor(
+        3,
+        40
+    );
+
+    display.print(
+        "SET "
+    );
+
+    display.print(
+        (int)round(
+            celsiusToFahrenheit(
+                (double)targetValue
+            )
+        )
+    );
+
+    display.print(
+        "F"
+    );
+
     // ========================================================
     // RIGHT SIDE - TARGET
     // ========================================================
@@ -841,7 +864,18 @@ void updateDisplay()
 
     display.setTextSize(1);
 
-    if (controlActive)
+    if (!targetConfirmed)
+    {
+        display.setCursor(
+            70,
+            51
+        );
+
+        display.print(
+            "SET"
+        );
+    }
+    else if (controlActive)
     {
         display.setCursor(
             3,
