@@ -57,22 +57,6 @@ const int MAX_TEMP = 200;
 const double MAX_SAFE_TEMP = 205.0;
 
 // ============================================================
-// TEMPERATURE FILTER
-// ============================================================
-
-// Maximum temperature change allowed between two valid readings.
-// MAX6675 is sampled every 250 ms.
-const double MAX_TEMP_CHANGE_PER_SAMPLE = 10.0;   // °C
-
-// Number of consecutive abnormal readings required before
-// accepting a large temperature change.
-const int FILTER_CONFIRM_COUNT = 3;
-
-double lastAcceptedTemperature = NAN;
-
-double pendingTemperature = NAN;
-int pendingTemperatureCount = 0;
-// ============================================================
 // PWM
 // ============================================================
 
@@ -99,13 +83,20 @@ bool targetConfirmed = false;
 volatile int encoderValue = 0;
 volatile bool encoderMoved = false;
 
-int lastCLKState = HIGH;
+// Quadrature transitions per physical click.
+// Most KY-040 style encoders = 4. Try 2 or 1 if one click doesn't change the value by exactly 1.
+const int8_t ENCODER_STEPS_PER_DETENT = 4;
 
-bool lastButtonState = HIGH;
+volatile uint8_t lastEncoded = 0b11;
+volatile int8_t encoderAccum = 0;
 
-unsigned long lastButtonTime = 0;
-
-const unsigned long BUTTON_DEBOUNCE_TIME = 200;
+// index = (previousState << 2) | newState, state = (CLK << 1) | DT
+const int8_t ENCODER_TABLE[16] = {
+     0, -1,  1,  0,
+     1,  0,  0, -1,
+    -1,  0,  0,  1,
+     0,  1, -1,  0
+};
 
 // ============================================================
 // TEMPERATURE
@@ -124,6 +115,16 @@ double celsiusToFahrenheit(double celsius)
 
 int targetValue = 0;
 double setpoint = 0.0;
+
+// ============================================================
+// BUTTON
+// ============================================================
+
+bool lastButtonState = HIGH;
+
+unsigned long lastButtonTime = 0;
+
+const unsigned long BUTTON_DEBOUNCE_TIME = 200;
 
 // ============================================================
 // PID
@@ -177,41 +178,54 @@ void heaterOff()
 }
 
 // ============================================================
+// RESET PID
+// ============================================================
+
+void resetPID()
+{
+    integral = 0.0;
+    previousError = 0.0;
+    pidOutput = 0.0;
+    previousPIDCalculation = millis();
+
+    heaterOff();
+}
+
+// ============================================================
 // ENCODER INTERRUPT
 // ============================================================
 
 void IRAM_ATTR encoderISR()
 {
-    int currentDT = digitalRead(ENCODER_DT);
+    uint8_t newState =
+        (digitalRead(ENCODER_CLK) << 1) | digitalRead(ENCODER_DT);
 
-    if (currentDT == HIGH)
+    if (newState == lastEncoded) return;
+
+    int8_t step = ENCODER_TABLE[(lastEncoded << 2) | newState];
+    lastEncoded = newState;
+
+    encoderAccum += step;
+
+    if (encoderAccum >= ENCODER_STEPS_PER_DETENT)
     {
-        encoderValue++;
-
-        if (encoderValue > MAX_TEMP)
-        {
-            encoderValue = MAX_TEMP;
-        }
+        encoderAccum = 0;
+        if (encoderValue < MAX_TEMP) encoderValue++;
+        encoderMoved = true;
     }
-    else
+    else if (encoderAccum <= -ENCODER_STEPS_PER_DETENT)
     {
-        encoderValue--;
-
-        if (encoderValue < MIN_TEMP)
-        {
-            encoderValue = MIN_TEMP;
-        }
+        encoderAccum = 0;
+        if (encoderValue > MIN_TEMP) encoderValue--;
+        encoderMoved = true;
     }
 
-    encoderMoved = true;
+    // Resting position: throw away any partial turn so errors can't accumulate
+    if (newState == 0b11) encoderAccum = 0;
 }
 
 // ============================================================
 // READ TEMPERATURE
-// ============================================================
-
-// ============================================================
-// READ TEMPERATURE WITH SOFTWARE FILTER
 // ============================================================
 
 void readTemperature()
@@ -248,124 +262,11 @@ void readTemperature()
     }
 
     // --------------------------------------------------------
-    // FIRST VALID READING
+    // DIRECT TEMPERATURE READING
     // --------------------------------------------------------
 
-    if (isnan(lastAcceptedTemperature))
-    {
-        lastAcceptedTemperature = temperature;
-        currentTemperature = temperature;
-
-        temperatureValid = true;
-
-        pendingTemperature = NAN;
-        pendingTemperatureCount = 0;
-
-        return;
-    }
-
-    // --------------------------------------------------------
-    // CALCULATE CHANGE FROM LAST ACCEPTED VALUE
-    // --------------------------------------------------------
-
-    double temperatureChange =
-        fabs(temperature - lastAcceptedTemperature);
-
-    // --------------------------------------------------------
-    // NORMAL CHANGE
-    //
-    // If the temperature changed by a reasonable amount,
-    // accept it immediately.
-    // --------------------------------------------------------
-
-    if (temperatureChange <= MAX_TEMP_CHANGE_PER_SAMPLE)
-    {
-        lastAcceptedTemperature = temperature;
-        currentTemperature = temperature;
-
-        temperatureValid = true;
-
-        // Cancel any pending abnormal reading
-        pendingTemperature = NAN;
-        pendingTemperatureCount = 0;
-
-        return;
-    }
-
-    // --------------------------------------------------------
-    // ABNORMAL CHANGE DETECTED
-    //
-    // Example:
-    //
-    // 100°C -> 50°C
-    //
-    // Difference = 50°C
-    //
-    // This reading is NOT immediately accepted.
-    // --------------------------------------------------------
-
-    // Check whether this abnormal value is consistent with
-    // previous abnormal readings.
-
-    if (!isnan(pendingTemperature))
-    {
-        if (fabs(temperature - pendingTemperature)
-            <= MAX_TEMP_CHANGE_PER_SAMPLE)
-        {
-            pendingTemperatureCount++;
-        }
-        else
-        {
-            // New abnormal value, restart confirmation
-            pendingTemperature = temperature;
-            pendingTemperatureCount = 1;
-        }
-    }
-    else
-    {
-        pendingTemperature = temperature;
-        pendingTemperatureCount = 1;
-    }
-
-    // --------------------------------------------------------
-    // ACCEPT ONLY AFTER MULTIPLE CONSISTENT READINGS
-    // --------------------------------------------------------
-
-    if (pendingTemperatureCount >= FILTER_CONFIRM_COUNT)
-    {
-        lastAcceptedTemperature = temperature;
-        currentTemperature = temperature;
-
-        temperatureValid = true;
-
-        pendingTemperature = NAN;
-        pendingTemperatureCount = 0;
-    }
-
-    // --------------------------------------------------------
-    // OTHERWISE:
-    // Keep the previous accepted temperature.
-    //
-    // This is important because the PID will continue using
-    // the last trustworthy temperature instead of the bad
-    // MAX6675 reading.
-    // --------------------------------------------------------
-}
-
-// ============================================================
-// RESET PID
-// ============================================================
-
-void resetPID()
-{
-    integral = 0.0;
-    previousError = 0.0;
-    pidOutput = 0.0;
-
-    previousPIDCalculation =
-        millis();
-
-    heaterOff();
+    currentTemperature = temperature;
+    temperatureValid = true;
 }
 
 // ============================================================
@@ -1124,18 +1025,11 @@ void setup()
         INPUT_PULLUP
     );
 
-    lastCLKState =
-        digitalRead(
-            ENCODER_CLK
-        );
+    lastEncoded =
+        (digitalRead(ENCODER_CLK) << 1) | digitalRead(ENCODER_DT);
 
-    attachInterrupt(
-        digitalPinToInterrupt(
-            ENCODER_CLK
-        ),
-        encoderISR,
-        FALLING
-    );
+    attachInterrupt(digitalPinToInterrupt(ENCODER_CLK), encoderISR, CHANGE);
+    attachInterrupt(digitalPinToInterrupt(ENCODER_DT),  encoderISR, CHANGE);
 
     // ========================================================
     // PWM
