@@ -103,6 +103,20 @@ double celsiusToFahrenheit(double celsius)
 }
 
 // ============================================================
+// GLITCH REJECTION
+// (stops false over-temp trips / sudden heater cut-off)
+// ============================================================
+
+const double  MAX_TEMP_JUMP            = 15.0;  // °C allowed between samples
+const uint8_t MAX_BAD_SAMPLES          = 3;     // consecutive bad samples tolerated
+const uint8_t OVERTEMP_CONFIRM_SAMPLES = 3;     // consecutive over-temp samples to trip
+
+double  lastGoodTemperature = NAN;
+uint8_t badSampleCount      = 0;
+uint8_t overTempCount       = 0;
+bool    overTempConfirmed   = false;
+
+// ============================================================
 // TARGET
 // ============================================================
 
@@ -199,30 +213,82 @@ void readTemperature()
     double temperature =
         thermocouple.readCelsius();
 
-    // MAX6675 disconnected / invalid
-    if (isnan(temperature))
+    // --------------------------------------------------------
+    // HARD FAULT: disconnected / out of range
+    // --------------------------------------------------------
+
+    if (
+        isnan(temperature) ||
+        temperature < -20.0 ||
+        temperature > 1000.0
+    )
     {
-        currentTemperature = NAN;
-        temperatureValid = false;
+        badSampleCount++;
+
+        // Short glitch: hold last good value instead of cutting power
+        if (
+            !isnan(lastGoodTemperature) &&
+            badSampleCount <= MAX_BAD_SAMPLES
+        )
+        {
+            return;
+        }
+
+        // Fault persisted: sensor is really invalid
+        lastGoodTemperature = NAN;
+        currentTemperature  = NAN;
+        temperatureValid    = false;
+        overTempCount       = 0;
+        overTempConfirmed   = false;
 
         heaterOff();
 
         return;
     }
 
-    // MAX6675 fault
-    if (temperature < -20.0 || temperature > 1000.0)
+    // --------------------------------------------------------
+    // IMPLAUSIBLE JUMP: almost certainly electrical noise
+    // --------------------------------------------------------
+
+    if (
+        !isnan(lastGoodTemperature) &&
+        fabs(temperature - lastGoodTemperature) > MAX_TEMP_JUMP
+    )
     {
-        currentTemperature = NAN;
-        temperatureValid = false;
+        badSampleCount++;
 
-        heaterOff();
+        if (badSampleCount <= MAX_BAD_SAMPLES)
+        {
+            return;   // ignore this sample
+        }
 
-        return;
+        // Jump persisted: treat it as a real change and accept it
     }
 
-    currentTemperature = temperature;
-    temperatureValid = true;
+    // --------------------------------------------------------
+    // GOOD SAMPLE
+    // --------------------------------------------------------
+
+    badSampleCount      = 0;
+    lastGoodTemperature = temperature;
+    currentTemperature  = temperature;
+    temperatureValid    = true;
+
+    // Over-temp must persist for several samples
+    if (temperature >= MAX_SAFE_TEMP)
+    {
+        if (overTempCount < 255)
+        {
+            overTempCount++;
+        }
+    }
+    else
+    {
+        overTempCount = 0;
+    }
+
+    overTempConfirmed =
+        (overTempCount >= OVERTEMP_CONFIRM_SAMPLES);
 }
 
 // ============================================================
@@ -408,9 +474,10 @@ void updateHeater()
     // ========================================================
     // SAFETY CHECK 6
     // Maximum temperature
+    // (confirmed over several samples, see readTemperature)
     // ========================================================
 
-    if (currentTemperature >= MAX_SAFE_TEMP)
+    if (overTempConfirmed)
     {
         heaterOff();
 
