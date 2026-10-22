@@ -52,9 +52,9 @@ MAX6675 thermocouple(
 // ============================================================
 
 const int MIN_TEMP = 0;
-const int MAX_TEMP = 200;
+const int MAX_TEMP = 210;
 
-const double MAX_SAFE_TEMP = 205.0;
+const double MAX_SAFE_TEMP = 220.0;
 
 // ============================================================
 // PWM
